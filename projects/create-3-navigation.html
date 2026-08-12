@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Create 3 Airtable Navigation | Davide Mirza</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="nav-logo" href="../index.html">Davide Mirza</a>
+    <ul class="nav-links">
+      <li><a href="../index.html#about">About</a></li>
+      <li><a href="../index.html#experience">Experience</a></li>
+      <li><a href="../projects.html">Projects</a></li>
+      <li><a href="../resume.html">Resume</a></li>
+      <li><a class="nav-cta" href="https://www.linkedin.com/in/davide-mirza-abb95b329" target="_blank" rel="noopener">LinkedIn</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="page-hero">
+  <div class="container">
+    <p class="section-label">Project · Robotics</p>
+    <h1>Create 3 Airtable Navigation</h1>
+    <p>Remote teleoperation of an iRobot Create 3 through a maze — using Airtable as a real-time command bus between a classroom operator and the robot.</p>
+    <div class="chips">
+      <span class="chip">ROS 2</span>
+      <span class="chip">Airtable API</span>
+      <span class="chip">Python</span>
+      <span class="chip">3D printing</span>
+    </div>
+  </div>
+</header>
+
+<main class="article">
+  <img src="../images/create3nav-01.jpg" alt="Create 3 teleoperated navigation">
+
+
+  <h2>Project analysis</h2>
+  <p>For this project, we designed a system to remotely navigate the Create 3 robot through a maze while avoiding obstacles and reaching a target location. The robot was controlled by sending values to Airtable while the Create 3 reads them and completes tasks, which allowed the operator in the classroom to control the robot located in Nolop. To provide visual feedback, we used a live camera setup so the operator could see the robot's position in the maze and adjust movements accordingly. I created a simple setup using a 3D-printed phone stand following the project constraints such as not using tape or hot glue. The main challenge was coordinating the camera view with the Airtable commands to move the robot accurately and avoid obstacles in the maze.</p>
+  <figure class="video-embed">
+    <iframe src="https://drive.google.com/file/d/194iYjFzLy1kJS_cSKK-2D68mxwZC5dMG/preview" title="The robot in use" allow="autoplay; fullscreen" allowfullscreen loading="lazy"></iframe>
+    <figcaption>The robot in use</figcaption>
+  </figure>
+
+  <figure class="video-embed">
+    <iframe src="https://drive.google.com/file/d/1i1X-N-QLf7a7KmKCmkc3FasMSqaLxvsm/preview" title="Pilot view from the onboard camera" allow="autoplay; fullscreen" allowfullscreen loading="lazy"></iframe>
+    <figcaption>Pilot view from the onboard camera</figcaption>
+  </figure>
+
+  <figure class="video-embed">
+    <iframe src="https://drive.google.com/file/d/1vhSxjy_NMu80Z9wKmdTo-i1HY4z-xV8g/preview" title="In-class obstacle course run" allow="autoplay; fullscreen" allowfullscreen loading="lazy"></iframe>
+    <figcaption>In-class obstacle course run</figcaption>
+  </figure>
+
+  <figure class="video-embed">
+    <iframe src="https://drive.google.com/file/d/1ssh1xWRIr-f-8OoWVh1X4nvHcJ8OK6H-/preview" title="Second obstacle course run" allow="autoplay; fullscreen" allowfullscreen loading="lazy"></iframe>
+    <figcaption>Second obstacle course run</figcaption>
+  </figure>
+  <h2>How it works</h2>
+  <p>This project uses two small Python programs to enable "remote driving" of an iRobot Create 3 through Airtable. The first script runs on the robot (ROS 2) and polls an Airtable table ~5 times per second, reading three rows — VelocityLinear, AngularVelocity, and an optional Dock flag — then converts those values into a ROS Twist message published to cmd_vel to move the robot; if Dock is toggled, it safely stops and triggers the Create 3 docking action. The second script is a terminal-based controller that uses curses to read keyboard inputs (W/S/A/D) and writes the corresponding linear and angular commands into Airtable via a PATCH request, effectively turning Airtable into a simple "command bus" between the classroom operator and the robot in Nolop. To make control safer and smoother, the terminal controller includes a deadman timer that automatically resets values to zero if no key is pressed recently, preventing the robot from continuing to drive if the operator loses focus or the connection lags.</p>
+
+  <details class="code">
+    <summary>View Python code — terminal controller (writes to Airtable)</summary>
+    <pre><code>import os
+import time
+import curses
+import requests
+
+# Airtable configuration
+BASE_ID = &quot;appiTPxK2hQkiF9LC&quot;
+TABLE_NAME = &quot;Table 1&quot;
+TOKEN = &quot;YOUR_AIRTABLE_TOKEN&quot;
+TABLE_URL = f&quot;https://api.airtable.com/v0/appiTPxK2hQkiF9LC/Table%201&quot;
+
+HEADERS = {
+    &quot;Authorization&quot;: f&quot;Bearer YOUR_AIRTABLE_TOKEN&quot;,
+    &quot;Content-Type&quot;: &quot;application/json&quot;,
+}
+
+# Driving values
+VEL_FWD = 1
+VEL_BACK = -1
+ANG_POS = 1
+ANG_NEG = -1
+
+LOOP_HZ = 50
+DEADMAN_SEC = 0.25
+
+def list_records():
+    r = requests.get(TABLE_URL, headers=HEADERS)
+    r.raise_for_status()
+    return r.json()[&quot;records&quot;]
+
+def get_record_ids():
+    records = list_records()
+    name_to_id = {}
+    for rec in records:
+        name = rec.get(&quot;fields&quot;, {}).get(&quot;Name&quot;)
+        if name:
+            name_to_id[name] = rec[&quot;id&quot;]
+    missing = [n for n in (&quot;VelocityLinear&quot;, &quot;AngularVelocity&quot;) if n not in name_to_id]
+    if missing:
+        raise ValueError(f&quot;Missing records with Name={missing}. Check your Airtable &#x27;Name&#x27; field values.&quot;)
+    return name_to_id[&quot;VelocityLinear&quot;], name_to_id[&quot;AngularVelocity&quot;]
+
+def batch_update(vel_rec_id, ang_rec_id, vel_value, ang_value):
+    payload = {
+        &quot;records&quot;: [
+            {&quot;id&quot;: vel_rec_id, &quot;fields&quot;: {&quot;Notes&quot;: vel_value}},
+            {&quot;id&quot;: ang_rec_id, &quot;fields&quot;: {&quot;Notes&quot;: ang_value}},
+        ],
+        &quot;typecast&quot;: True,
+    }
+    r = requests.patch(TABLE_URL, headers=HEADERS, json=payload)
+    if not r.ok:
+        print(&quot;STATUS:&quot;, r.status_code)
+        print(&quot;BODY:&quot;, r.text)
+        print(&quot;PAYLOAD:&quot;, payload)
+    r.raise_for_status()
+
+def clamp_int(x):
+    return int(x)
+
+def main(stdscr):
+    if not TOKEN:
+        raise RuntimeError(&quot;AIRTABLE_TOKEN env var not set. Example: export AIRTABLE_TOKEN=&#x27;pat_...&#x27;&quot;)
+
+    vel_rec_id, ang_rec_id = get_record_ids()
+
+    curses.cbreak()
+    stdscr.nodelay(True)
+    stdscr.keypad(True)
+
+    vel = 0
+    ang = 0
+    last_sent = (None, None)
+    last_key_time = time.time() # ADDED
+
+    stdscr.clear()
+    stdscr.addstr(
+        0, 0,
+        &quot;Controls: w=+2 vel, s=-2 vel, a=-ang, d=+ang, q=quit\n&quot;
+    )
+    stdscr.refresh()
+
+    dt = 1.0 / LOOP_HZ
+    while True:
+        key = stdscr.getch()
+        now = time.time()
+
+        if key != -1:
+            ch = chr(key).lower() if 0 &lt;= key &lt; 256 else &quot;&quot;
+            last_key_time = now
+            if ch == &quot;q&quot;:
+                vel, ang = 0, 0
+                if (vel, ang) != last_sent:
+                    batch_update(vel_rec_id, ang_rec_id, clamp_int(vel), clamp_int(ang))
+                break
+            elif ch == &quot;w&quot;:
+                vel, ang = VEL_FWD, 0
+            elif ch == &quot;s&quot;:
+                vel, ang = VEL_BACK, 0
+            elif ch == &quot;d&quot;:
+                vel, ang = 0, ANG_POS
+            elif ch == &quot;a&quot;:
+                vel, ang = 0, ANG_NEG
+
+        # deadman stop if no keypress recently
+        if (now - last_key_time) &gt; DEADMAN_SEC:
+            vel, ang = 0, 0
+
+        if (vel, ang) != last_sent:
+            batch_update(vel_rec_id, ang_rec_id, clamp_int(vel), clamp_int(ang))
+            last_sent = (vel, ang)
+
+        stdscr.addstr(3, 0, f&quot;VelocityLinear Notes: {vel:&gt;4} AngularVelocity Notes: {ang:&gt;4} &quot;)
+        stdscr.refresh()
+        time.sleep(dt)
+
+if __name__ == &quot;__main__&quot;:
+    curses.wrapper(main)</code></pre>
+  </details>
+
+  <details class="code">
+    <summary>View Python code — robot node (reads from Airtable, ROS 2)</summary>
+    <pre><code>import os
+import time
+import requests
+
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionClient
+from geometry_msgs.msg import Twist
+from irobot_create_msgs.action import Dock
+
+BASE_ID = &quot;appiTPxK2hQkiF9LC&quot;
+TABLE_NAME = &quot;Table 1&quot;
+URL = &quot;https://api.airtable.com/v0/appiTPxK2hQkiF9LC/Table%201&quot;
+
+VEL_ROW_NAME = &quot;VelocityLinear&quot;
+ANG_ROW_NAME = &quot;AngularVelocity&quot;
+DOCK_ROW_NAME = &quot;Dock&quot;
+
+POLL_HZ = 5 #how many times it gets data from the airtable
+CMD_TOPIC = &quot;cmd_vel&quot;
+
+class AirtableDrive(Node):
+    def __init__(self):
+        super().__init__(&quot;airtable_drive&quot;)
+        self.token = os.getenv(&quot;AIRTABLE_TOKEN&quot;)
+        if not self.token:
+            raise RuntimeError(&quot;AIRTABLE_TOKEN not set. do: export AIRTABLE_TOKEN=&#x27;pat_...&#x27;&quot;)
+
+        self.headers = {&quot;Authorization&quot;: f&quot;Bearer {self.token}&quot;}
+        self.pub = self.create_publisher(Twist, CMD_TOPIC, 10)
+        self.dock_client = ActionClient(self, Dock, &quot;dock&quot;)
+        self.docking = False
+
+        self.last_v = None
+        self.last_w = None
+        self.last_dock = 0
+
+        self.timer = self.create_timer(1.0 / POLL_HZ, self.loop)
+
+    def get_airtable(self):
+        r = requests.get(URL, headers=self.headers, timeout=2.0)
+        r.raise_for_status()
+        return r.json().get(&quot;records&quot;, [])
+
+    def parse(self, records):
+        v = 0.0
+        w = 0.0
+        dock_flag = 0
+        for rec in records:
+            fields = rec.get(&quot;fields&quot;, {})
+            name = fields.get(&quot;Name&quot;)
+            notes = fields.get(&quot;Notes&quot;, 0)
+            if name == VEL_ROW_NAME:
+                try:
+                    v = float(notes or 0)
+                except:
+                    v = 0.0
+            elif name == ANG_ROW_NAME:
+                try:
+                    w = float(notes or 0)
+                except:
+                    w = 0.0
+            elif name == DOCK_ROW_NAME:
+                try:
+                    dock_flag = int(notes or 0)
+                except:
+                    dock_flag = 0
+        return v, w, dock_flag
+
+    def send_cmd(self, v, w):
+        msg = Twist()
+        msg.linear.x = float(v)
+        msg.angular.z = float(w)
+        self.pub.publish(msg)
+
+    def start_dock(self):
+        if self.docking:
+            return
+        self.docking = True
+        self.get_logger().info(&quot;docking...&quot;)
+        goal = Dock.Goal()
+        self.dock_client.wait_for_server()
+        fut = self.dock_client.send_goal_async(goal)
+        fut.add_done_callback(self.dock_goal_cb)
+
+    def dock_goal_cb(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info(&quot;dock goal rejected&quot;)
+            self.docking = False
+            return
+        self.get_logger().info(&quot;dock goal accepted&quot;)
+        result_fut = goal_handle.get_result_async()
+        result_fut.add_done_callback(self.dock_result_cb)
+
+    def dock_result_cb(self, future):
+        result = future.result().result
+        self.get_logger().info(f&quot;dock done, is_docked={result.is_docked}&quot;)
+        self.docking = False
+
+    def loop(self):
+        try:
+            records = self.get_airtable()
+            v, w, dock_flag = self.parse(records)
+
+            #smoothness
+            if not self.docking:
+                self.send_cmd(v, w)
+                self.last_v, self.last_w = v, w
+
+            if (dock_flag == 1) and (self.last_dock != 1):
+                self.send_cmd(0.0, 0.0)
+                time.sleep(0.1)
+                self.start_dock()
+            self.last_dock = dock_flag
+
+        except Exception as e:
+            if not self.docking:
+                self.send_cmd(0.0, 0.0)
+            self.get_logger().warn(f&quot;airtable error -&gt; stopping. {e}&quot;)
+
+def main():
+    rclpy.init()
+    node = AirtableDrive()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == &quot;__main__&quot;:
+    main()</code></pre>
+  </details>
+
+  <h2>Reflection</h2>
+  <p>In this project, my role leaned much more toward the coding and software side rather than the mechanical engineering aspects. Instead of focusing on building the physical structure, I worked mainly on the programming that enabled the robot to be controlled remotely through Airtable. I really enjoyed this part of the project because it gave me the opportunity to fully understand how the code worked, including how APIs communicate with external systems, how authentication using token keys functions, and how data can be sent and retrieved in real time. Writing the scripts and connecting the robot to Airtable helped me better understand how software can control physical systems remotely. Overall, the project went very smoothly and we did not encounter any major technical issues, which allowed us to focus on refining the system and ensuring the robot responded correctly to the commands sent from the terminal controller.</p>
+
+
+  <h2>Gallery</h2>
+  <div class="gallery">
+    <img src="../images/create3nav-02.jpg" alt="Create 3 teleoperated navigation — 2" loading="lazy">
+    <img src="../images/create3nav-03.jpg" alt="Create 3 teleoperated navigation — 3" loading="lazy">
+    <img src="../images/create3nav-04.jpg" alt="Create 3 teleoperated navigation — 4" loading="lazy">
+  </div>
+
+  <a class="back-link" href="../projects.html">← Back to Projects</a>
+</main>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-links">
+      <a href="https://www.linkedin.com/in/davide-mirza-abb95b329" target="_blank" rel="noopener">LinkedIn</a>
+      <a href="../resume.html">Resume</a>
+    </div>
+    <p class="footer-copy">© 2026 Davide Mirza</p>
+  </div>
+</footer>
+
+</body>
+</html>

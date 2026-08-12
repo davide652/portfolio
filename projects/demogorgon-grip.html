@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Demogorgon Grip | Davide Mirza</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="nav-logo" href="../index.html">Davide Mirza</a>
+    <ul class="nav-links">
+      <li><a href="../index.html#about">About</a></li>
+      <li><a href="../index.html#experience">Experience</a></li>
+      <li><a href="../projects.html">Projects</a></li>
+      <li><a href="../resume.html">Resume</a></li>
+      <li><a class="nav-cta" href="https://www.linkedin.com/in/davide-mirza-abb95b329" target="_blank" rel="noopener">LinkedIn</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="page-hero">
+  <div class="container">
+    <p class="section-label">Project · Mechatronics</p>
+    <h1>Demogorgon Grip</h1>
+    <p>An original mechanical gripper using linkages, gears, and a stepper motor that autonomously grasps a figure without any direct human interaction.</p>
+    <div class="chips">
+      <span class="chip">Gears &amp; linkages</span>
+      <span class="chip">3D printing</span>
+      <span class="chip">Laser cutting</span>
+      <span class="chip">Onshape</span>
+      <span class="chip">Raspberry Pi</span>
+    </div>
+  </div>
+</header>
+
+<main class="article">
+  <img src="../images/demogorgon-01.jpg" alt="Demogorgon Grip">
+
+
+  <h2>Project analysis</h2>
+  <p>This project involves designing and fabricating a custom mechanical gripper from scratch that uses both linkages and gears for motion transmission.</p>
+  <p>The gripper is actuated by a stepper motor and must autonomously grasp a figure without any direct human interaction during the gripping process. All interactions are limited to the stepper motor housing, with no components attached directly to the figure. After successfully gripping the figure, the entire system must be transported 2 feet without dropping it while complying with handling constraints.</p>
+
+  <h2>Grip in use</h2>
+  <p>The video demonstrates the gripper in operation as it autonomously engages and lifts the figure using the gear- and linkage-driven mechanism. It highlights the smooth actuation of the stepper motor, the coordinated motion of the gripper fingers, and the system's ability to securely hold the figure without human intervention. The footage also shows the gripper maintaining a stable grasp while the entire system is moved, verifying that the design meets the project constraints and functional requirements.</p>
+  <figure class="video-embed">
+    <iframe src="https://drive.google.com/file/d/1PsmJUv4rWZKqOavB_Qtek4lDwswLqp8a/preview" title="The gripper grasping and transporting the figure" allow="autoplay; fullscreen" allowfullscreen loading="lazy"></iframe>
+    <figcaption>The gripper grasping and transporting the figure</figcaption>
+  </figure>
+  <h2>How it was built</h2>
+  <p>The project was completed through a combination of mechanical fabrication, electronics integration, and software development. The gripper clamps were 3D printed for precision and custom fit, while the gears and linkage components were laser-cut from durable materials to ensure smooth and reliable motion. On the electronics side, the stepper motor was connected to an H-bridge and controlled via a Raspberry Pi, with custom code written to actuate the gripper automatically. The system was first tested with a simplified prototype to refine the motion, verify grip strength, and troubleshoot any mechanical or electrical issues. Once the prototype performed reliably, the design was implemented in the full system, successfully demonstrating the gripper's ability to autonomously pick up and transport the figure.</p>
+
+  <details class="code">
+    <summary>View Python code — stepper motor control</summary>
+    <pre><code># This script moves a stepper motor using LEFT and RIGHT arrow keys.
+import RPi.GPIO as GPIO
+import time
+import curses
+
+GPIO.setmode(GPIO.BOARD)
+
+# Define the GPIO pins for the L298N motor driver
+OUT1 = 16
+OUT2 = 18
+OUT3 = 19
+OUT4 = 21
+
+# Set the GPIO pins as output
+GPIO.setup(OUT1, GPIO.OUT)
+GPIO.setup(OUT2, GPIO.OUT)
+GPIO.setup(OUT3, GPIO.OUT)
+GPIO.setup(OUT4, GPIO.OUT)
+
+# Step sequence (full-step)
+step_sequence = [
+    [1, 0, 1, 0],
+    [0, 1, 1, 0],
+    [0, 1, 0, 1],
+    [1, 0, 0, 1]
+]
+
+step_delay = 0.007
+current_step = 0
+
+def move_step(direction):
+    global current_step
+    if direction == "close":    # Right arrow
+        current_step = (current_step + 1) % 4
+    elif direction == "open":   # Left arrow
+        current_step = (current_step - 1) % 4
+    GPIO.output(OUT1, step_sequence[current_step][0])
+    GPIO.output(OUT2, step_sequence[current_step][1])
+    GPIO.output(OUT3, step_sequence[current_step][2])
+    GPIO.output(OUT4, step_sequence[current_step][3])
+    time.sleep(step_delay)
+
+def main(stdscr):
+    stdscr.nodelay(True)
+    stdscr.keypad(True)
+    stdscr.addstr(0, 0, "Use LEFT / RIGHT arrows to move motor. Press 'q' to quit.")
+    try:
+        while True:
+            key = stdscr.getch()
+            if key == curses.KEY_RIGHT:
+                move_step("open")
+            elif key == curses.KEY_LEFT:
+                move_step("close")
+            elif key == ord('q'):
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        GPIO.cleanup()
+
+curses.wrapper(main)</code></pre>
+  </details>
+
+  <h2>Reflection</h2>
+  <p>This project demonstrates hands-on mechanical design and fabrication under strict constraints, with a focus on using gears and linkages to create a functional, stepper-motor-driven gripper. Key takeaways include the importance of iterative design, mechanical reliability, and teamwork when building real-world robotic systems.</p>
+  <p>A major challenge occurred when the system stopped working while being moved into the red case, caused by two non-functional Raspberry Pi pins. Our group troubleshot the issue collaboratively and resolved it, reinforcing the value of systematic debugging and robust hardware handling.</p>
+  <p>Through this project, I developed skills in gear design, laser cutting, and 3D printing, and gained my first experience using Onshape for CAD and assemblies. I also strengthened my ability to translate CAD designs into physical prototypes and refine them with testing.</p>
+
+
+  <h2>Gallery</h2>
+  <div class="gallery">
+    <img src="../images/demogorgon-02.jpg" alt="Demogorgon Grip — 2" loading="lazy">
+    <img src="../images/demogorgon-03.jpg" alt="Demogorgon Grip — 3" loading="lazy">
+    <img src="../images/demogorgon-04.jpg" alt="Demogorgon Grip — 4" loading="lazy">
+    <img src="../images/demogorgon-05.jpg" alt="Demogorgon Grip — 5" loading="lazy">
+    <img src="../images/demogorgon-06.jpg" alt="Demogorgon Grip — 6" loading="lazy">
+    <img src="../images/demogorgon-07.jpg" alt="Demogorgon Grip — 7" loading="lazy">
+    <img src="../images/demogorgon-08.jpg" alt="Demogorgon Grip — 8" loading="lazy">
+  </div>
+
+  <a class="back-link" href="../projects.html">← Back to Projects</a>
+</main>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-links">
+      <a href="https://www.linkedin.com/in/davide-mirza-abb95b329" target="_blank" rel="noopener">LinkedIn</a>
+      <a href="../resume.html">Resume</a>
+    </div>
+    <p class="footer-copy">© 2026 Davide Mirza</p>
+  </div>
+</footer>
+
+</body>
+</html>

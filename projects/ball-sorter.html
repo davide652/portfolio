@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ball Sorter | Davide Mirza</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="nav-logo" href="../index.html">Davide Mirza</a>
+    <ul class="nav-links">
+      <li><a href="../index.html#about">About</a></li>
+      <li><a href="../index.html#experience">Experience</a></li>
+      <li><a href="../projects.html">Projects</a></li>
+      <li><a href="../resume.html">Resume</a></li>
+      <li><a class="nav-cta" href="https://www.linkedin.com/in/davide-mirza-abb95b329" target="_blank" rel="noopener">LinkedIn</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="page-hero">
+  <div class="container">
+    <p class="section-label">Project · Mechatronics</p>
+    <h1>Ball Sorter</h1>
+    <p>An autonomous system that sorts red, blue, green, and yellow balls into separate outputs without human intervention.</p>
+    <div class="chips">
+      <span class="chip">Raspberry Pi</span>
+      <span class="chip">Color sensor</span>
+      <span class="chip">Stepper motors</span>
+      <span class="chip">Woodworking · 3D printing</span>
+    </div>
+  </div>
+</header>
+
+<main class="article">
+  <img src="../images/ballsorter-01.jpg" alt="Ball sorter">
+
+
+  <h2>Project analysis</h2>
+  <p>This project focused on designing an autonomous system that sorts red, blue, green, and yellow balls into separate outputs without human intervention. The system handles a random number of balls and reliably identifies and directs each color correctly, requiring integration of mechanical design and control.</p>
+
+  <h2>Sorter in use</h2>
+  <p>The video demonstrates the sorter in operation, showing that after an initial calibration, the system autonomously retrieves a ball, detects its color using a sensor, and rotates the cup holder platform to direct the ball into the correct slot.</p>
+  <p>The system uses a Raspberry Pi to control a color sensor and two stepper motors to sort the balls automatically. First, the sensor measures the ball's color by reading red, green, and blue values and compares them to calibrated reference data to identify the color. Based on the detected color, one stepper motor rotates the cup holder to line up the correct bin, while the second stepper motor moves the ball through the system. After the ball is sorted, the platform returns to its starting position so the process can repeat for the next ball.</p>
+  <figure class="video-embed">
+    <iframe src="https://drive.google.com/file/d/1o13vPso8GDMHhth7YN-6qTfnHiOA9VTe/preview" title="The sorter separating mixed balls" allow="autoplay; fullscreen" allowfullscreen loading="lazy"></iframe>
+    <figcaption>The sorter separating mixed balls</figcaption>
+  </figure>
+  <h2>How it was built</h2>
+  <p>This project uses two stepper motors driven by two H-bridge motor drivers to control the motion of the sorting mechanism and the rotation of the collection system. A Raspberry Pi serves as the main controller, handling motor control, logic, and system timing through custom code.</p>
+  <p>The physical structure of the machine is fabricated using a combination of woodworking techniques for the main frame and 3D printing for precise mechanical components such as mounts and guides. Electrical integration involves custom wiring, soldering, and proper power management to ensure reliable motor operation and communication between components.</p>
+
+  <details class="code">
+    <summary>View Python code — color detection &amp; sorting control</summary>
+    <pre><code>import RPi.GPIO as GPIO
+import time
+import math
+from RpiMotorLib import RpiMotorLib
+
+GpioPins = [23, 24, 25, 8]
+
+# Assign GPIO pin numbers to variables
+s0 = 6
+s1 = 5
+s2 = 12
+s3 = 14
+sig = 7 #labeled &quot;out&quot; on your board
+cycles = 10
+
+# Setup GPIO and pins
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(s0, GPIO.OUT)
+GPIO.setup(s1, GPIO.OUT)
+GPIO.setup(s2, GPIO.OUT)
+GPIO.setup(s3, GPIO.OUT)
+GPIO.setup(sig, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
+# Set frequency scaling
+GPIO.output(s0, GPIO.HIGH)
+GPIO.output(s1, GPIO.LOW)
+
+OUT1 = 21
+OUT2 = 20
+OUT3 = 26
+OUT4 = 16
+
+GPIO.setup(OUT1, GPIO.OUT)
+GPIO.setup(OUT2, GPIO.OUT)
+GPIO.setup(OUT3, GPIO.OUT)
+GPIO.setup(OUT4, GPIO.OUT)
+
+GPIO.output(OUT1, GPIO.LOW)
+GPIO.output(OUT2, GPIO.LOW)
+GPIO.output(OUT3, GPIO.LOW)
+GPIO.output(OUT4, GPIO.LOW)
+
+step_delay = 0.03
+steps_90 = 13
+steps_180 = 26
+
+sequence = [
+(1,0,1,0),
+(0,1,1,0),
+(0,1,0,1),
+(1,0,0,1)
+]
+
+red_cal = []
+green_cal = []
+blue_cal = []
+yellow_cal = []
+
+# Declare an named instance of class pass a name and type of motor
+mymotortest = RpiMotorLib.BYJMotor(&quot;MyMotorOne&quot;, &quot;Nema&quot;)
+
+time.sleep(0.5)
+
+def calibrate():
+    start_cal = False
+    color_start = False
+    for color in range(4):
+        print(color)
+        while (not color_start):
+            color_start = input(&quot;Start Color Calibration (y/n)? &quot;)
+            if (color_start == &quot;y&quot;):
+                color_start = True
+            else:
+                color_start = False
+        color_start = False
+        for x in range(5):
+            print(x)
+            while (not start_cal):
+                resp = input(&quot;Continue Calibration (y/n)? &quot;)
+                if (resp == &quot;y&quot;):
+                    start_cal = True
+                else:
+                    start_cal = False
+            start_cal = False
+
+            # Detect red values
+            GPIO.output(s2, GPIO.LOW)
+            GPIO.output(s3, GPIO.LOW)
+            time.sleep(0.1)
+            start_time = time.time()
+            for count in range(cycles):
+                GPIO.wait_for_edge(sig, GPIO.FALLING)
+            duration = time.time() - start_time
+            red = cycles / duration
+            print(&quot;red value - &quot;, red)
+
+            # Detect blue values
+            GPIO.output(s2, GPIO.LOW)
+            GPIO.output(s3, GPIO.HIGH)
+            time.sleep(0.1)
+            start_time = time.time()
+            for count in range(cycles):
+                GPIO.wait_for_edge(sig, GPIO.FALLING)
+            duration = time.time() - start_time
+            blue = cycles / duration
+            print(&quot;blue value - &quot;, blue)
+
+            # Detect green values
+            GPIO.output(s2, GPIO.HIGH)
+            GPIO.output(s3, GPIO.HIGH)
+            time.sleep(0.1)
+            start_time = time.time()
+            for count in range(cycles):
+                GPIO.wait_for_edge(sig, GPIO.FALLING)
+            duration = time.time() - start_time
+            green = cycles / duration
+            print(&quot;green value - &quot;, green)
+
+            if (color == 0):
+                red_cal.append([red, green, blue])
+            elif (color == 1):
+                green_cal.append([red, green, blue])
+            elif (color == 2):
+                blue_cal.append([red, green, blue])
+            else:
+                yellow_cal.append([red, green, blue])
+
+def sense():
+    # Detect red values
+    GPIO.output(s2, GPIO.LOW)
+    GPIO.output(s3, GPIO.LOW)
+    time.sleep(0.1)
+    start_time = time.time()
+    for count in range(cycles):
+        GPIO.wait_for_edge(sig, GPIO.FALLING)
+    duration = time.time() - start_time
+    red = cycles / duration
+    print(&quot;red value - &quot;, red)
+
+    # Detect blue values
+    GPIO.output(s2, GPIO.LOW)
+    GPIO.output(s3, GPIO.HIGH)
+    time.sleep(0.1)
+    start_time = time.time()
+    for count in range(cycles):
+        GPIO.wait_for_edge(sig, GPIO.FALLING)
+    duration = time.time() - start_time
+    blue = cycles / duration
+    print(&quot;blue value - &quot;, blue)
+
+    # Detect green values
+    GPIO.output(s2, GPIO.HIGH)
+    GPIO.output(s3, GPIO.HIGH)
+    time.sleep(0.1)
+    start_time = time.time()
+    for count in range(cycles):
+        GPIO.wait_for_edge(sig, GPIO.FALLING)
+    duration = time.time() - start_time
+    green = cycles / duration
+    print(&quot;green value - &quot;, green)
+
+    red_dis = 0
+    green_dis = 0
+    blue_dis = 0
+    yellow_dis = 0
+
+    for color in range(4):
+        distance = []
+        for x in range(5):
+            if (color == 0):
+                distance.append(math.sqrt(((red - red_cal[x][0]) ** 2) + ((green - red_cal[x][1]) ** 2) + ((blue - red_cal[x][2]) ** 2)))
+            elif (color == 1):
+                distance.append(math.sqrt(((red - green_cal[x][0]) ** 2) + ((green - green_cal[x][1]) ** 2) + ((blue - green_cal[x][2]) ** 2)))
+            elif (color == 2):
+                distance.append(math.sqrt(((red - blue_cal[x][0]) ** 2) + ((green - blue_cal[x][1]) ** 2) + ((blue - blue_cal[x][2]) ** 2)))
+            else:
+                distance.append(math.sqrt(((red - yellow_cal[x][0]) ** 2) + ((green - yellow_cal[x][1]) ** 2) + ((blue - yellow_cal[x][2]) ** 2)))
+        if (color == 0):
+            red_dis = sum(distance) / len(distance)
+        elif (color == 1):
+            green_dis = sum(distance) / len(distance)
+        elif (color == 2):
+            blue_dis = sum(distance) / len(distance)
+        else:
+            yellow_dis = sum(distance) / len(distance)
+
+    pos_color = min(red_dis, blue_dis, yellow_dis, green_dis)
+
+    if (pos_color == red_dis):
+        return(&quot;Red&quot;)
+    elif (pos_color == blue_dis):
+        return(&quot;Blue&quot;)
+    elif (pos_color == yellow_dis):
+        return(&quot;Yellow&quot;)
+    else:
+        return(&quot;Green&quot;)
+
+def step_once(step):
+    GPIO.output(OUT1, step[0])
+    GPIO.output(OUT2, step[1])
+    GPIO.output(OUT3, step[2])
+    GPIO.output(OUT4, step[3])
+    time.sleep(step_delay)
+
+def rotate_steps(steps, direction):
+    seq = sequence if direction == &quot;CW&quot; else sequence[::-1]
+    for _ in range(steps):
+        for st in seq:
+            step_once(st)
+
+def go_and_return(steps, direction, ball):
+    rotate_steps(steps, direction)
+    time.sleep(2)
+    roll_ball(ball)
+    time.sleep(3)
+    back_dir = &quot;CCW&quot; if direction == &quot;CW&quot; else &quot;CW&quot;
+    rotate_steps(steps, back_dir)
+    time.sleep(1)
+
+def roll_ball(ball_num):
+    if (ball_num == 1):
+        mymotortest.motor_run(GpioPins , 0.08, 4, False, False, &quot;full&quot;, .2)
+        time.sleep(3)
+    elif (ball_num == 2):
+        mymotortest.motor_run(GpioPins , 0.08, 4, False, False, &quot;full&quot;, .2)
+        time.sleep(3)
+    elif (ball_num == 3):
+        mymotortest.motor_run(GpioPins , 0.08, 4, False, False, &quot;full&quot;, .2)
+        time.sleep(3)
+    elif (ball_num == 4):
+        mymotortest.motor_run(GpioPins , 0.08, 5, False, False, &quot;full&quot;, .2)
+        time.sleep(3)
+    elif (ball_num == 5):
+        mymotortest.motor_run(GpioPins , 0.08, 4, False, False, &quot;full&quot;, .2)
+        time.sleep(3)
+    elif (ball_num == 6):
+        mymotortest.motor_run(GpioPins , 0.08, 4, False, False, &quot;full&quot;, .2)
+        time.sleep(3)
+    elif (ball_num == 7):
+        mymotortest.motor_run(GpioPins , 0.08, 4, False, False, &quot;full&quot;, .2)
+        time.sleep(3)
+    elif (ball_num == 8):
+        mymotortest.motor_run(GpioPins , 0.08, 5, False, False, &quot;full&quot;, .2)
+        time.sleep(3)
+    elif (ball_num == 9):
+        mymotortest.motor_run(GpioPins , 0.08, 4, False, False, &quot;full&quot;, .2)
+        time.sleep(3)
+    else:
+        mymotortest.motor_run(GpioPins , 0.08, 4, False, False, &quot;full&quot;, .2)
+
+try:
+    # Calibrate
+    calibrate()
+
+    ready = False
+    while (not ready):
+        next_ball = input(&quot;Calibration is complete. Continue (y/n)? &quot;)
+        if (next_ball == &quot;y&quot;):
+            ready = True
+        else:
+            ready = False
+    time.sleep(2)
+
+    for ball in range(10):
+        # Sense ball
+        detect_color = sense()
+        if (detect_color == &quot;Red&quot;):
+            print(&quot;Red&quot;)
+            roll_ball(ball)
+            time.sleep(2)
+        elif (detect_color == &quot;Blue&quot;):
+            print(&quot;Blue&quot;)
+            go_and_return(steps_90, &quot;CCW&quot;, ball)
+        elif (detect_color == &quot;Green&quot;):
+            print(&quot;Green&quot;)
+            go_and_return(steps_90, &quot;CW&quot;, ball)
+        else:
+            print(&quot;Yellow&quot;)
+            go_and_return(steps_180, &quot;CCW&quot;, ball)
+
+except KeyboardInterrupt:
+    print(&quot;\nExiting Program&quot;)
+
+finally:
+    GPIO.cleanup()</code></pre>
+  </details>
+
+  <h2>Reflection</h2>
+  <p>This project resulted in a fully autonomous sorting system that works very well overall. All of the mechanical parts function smoothly and reliably, and the system is able to pick up balls, identify their color, and sort them into the correct locations without any human help. The motors, rotating platform, and overall structure performed as expected, showing that the mechanical design and control logic were successful.</p>
+  <p>The main area that could be improved is the color sensing. The sensor is not enclosed in a dark or shielded area, so outside light can sometimes affect how accurately it detects colors. Adding a black enclosure around the sensor would block ambient light and help the sensor read colors more consistently. With better light control and additional calibration, the system could achieve a higher accuracy and become a fully reliable, error-free autonomous sorter.</p>
+
+
+  <h2>Gallery</h2>
+  <div class="gallery">
+    <img src="../images/ballsorter-02.jpg" alt="Ball sorter — 2" loading="lazy">
+    <img src="../images/ballsorter-03.jpg" alt="Ball sorter — 3" loading="lazy">
+    <img src="../images/ballsorter-04.jpg" alt="Ball sorter — 4" loading="lazy">
+    <img src="../images/ballsorter-05.jpg" alt="Ball sorter — 5" loading="lazy">
+    <img src="../images/ballsorter-06.jpg" alt="Ball sorter — 6" loading="lazy">
+  </div>
+
+  <a class="back-link" href="../projects.html">← Back to Projects</a>
+</main>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-links">
+      <a href="https://www.linkedin.com/in/davide-mirza-abb95b329" target="_blank" rel="noopener">LinkedIn</a>
+      <a href="../resume.html">Resume</a>
+    </div>
+    <p class="footer-copy">© 2026 Davide Mirza</p>
+  </div>
+</footer>
+
+</body>
+</html>

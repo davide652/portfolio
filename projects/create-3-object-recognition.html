@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Create 3 Object Recognition | Davide Mirza</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="nav-logo" href="../index.html">Davide Mirza</a>
+    <ul class="nav-links">
+      <li><a href="../index.html#about">About</a></li>
+      <li><a href="../index.html#experience">Experience</a></li>
+      <li><a href="../projects.html">Projects</a></li>
+      <li><a href="../resume.html">Resume</a></li>
+      <li><a class="nav-cta" href="https://www.linkedin.com/in/davide-mirza-abb95b329" target="_blank" rel="noopener">LinkedIn</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="page-hero">
+  <div class="container">
+    <p class="section-label">Project · Robotics &amp; Machine Learning</p>
+    <h1>Create 3 Object Recognition</h1>
+    <p>An autonomous warehouse-style pick-and-place robot that identifies Stranger Things characters with a neural network and delivers them to the right locations — fully autonomously.</p>
+    <div class="chips">
+      <span class="chip">ROS 2</span>
+      <span class="chip">TensorFlow / Keras</span>
+      <span class="chip">OpenCV</span>
+      <span class="chip">Custom gripper</span>
+    </div>
+  </div>
+</header>
+
+<main class="article">
+  <img src="../images/create3obj-01.jpg" alt="Create 3 object recognition robot">
+
+
+  <h2>Project analysis</h2>
+  <p>For this project, I built an autonomous system that allows the Create 3 robot to identify and transport Stranger Things characters within a warehouse-style environment. The robot was trained to recognize at least two different characters using onboard perception, then navigate to their predefined locations. Once the robot detected which character was present, it determined the correct drop-off location associated with that character and transported it there without any human intervention. The system was designed to operate under uncertainty: the orientation of the characters was unknown beforehand, and the correct drop-off locations were only revealed shortly before the demo. The robot therefore had to combine navigation, object detection, and decision-making to successfully locate, identify, pick up, and deliver the characters to the correct destinations autonomously.</p>
+
+  <h2>Create 3 in use</h2>
+  <p>During operation, the robot begins docked and first undocks before starting its navigation sequence. It autonomously travels to predefined pickup locations using a waypoint-based navigation system so that it always moves straight first and then turns, ensuring a consistent final orientation. At each pickup location, the robot performs a scan by rotating 90 degrees, capturing images with an onboard camera, and running a trained neural network model to identify which Stranger Things character is present. After identifying the character, the robot moves to the final pickup position and uses a stepper-motor-controlled gripper to pick up the figure. Based on the detected character, it then navigates to the correct drop-off location and releases the character with the gripper before moving on to the next pickup task, completing the entire process fully autonomously.</p>
+  <figure class="video-embed">
+    <iframe src="https://drive.google.com/file/d/1zBVNSSbKW-2PJ5yuFgC5kM4qzWAre9Ga/preview" title="Full autonomous pick-and-place run" allow="autoplay; fullscreen" allowfullscreen loading="lazy"></iframe>
+    <figcaption>Full autonomous pick-and-place run</figcaption>
+  </figure>
+  <h2>How it works</h2>
+  <p>This robot combines ROS 2 navigation, computer vision, and custom hardware to autonomously perform a pick-and-place task using an iRobot Create 3 base. The control program is written in Python with the ROS 2 rclpy framework and uses action interfaces such as NavigateToPosition, Undock, and RotateAngle to move between odometry-based waypoints, ensuring the robot travels in straight segments and maintains consistent orientation before approaching targets. A Raspberry Pi camera mounted on the robot captures images, which are processed with OpenCV and NumPy and classified using a TensorFlow/Keras neural network trained with Teachable Machine to identify Stranger Things characters. The robot also includes a custom 3D-printed gripper assembly mounted on top of the platform, which holds the claw mechanism and supporting structure. This gripper is powered by a stepper motor controlled through Raspberry Pi GPIO pins and an L298N motor driver, allowing the robot to physically grasp and release characters at their designated drop-off locations.</p>
+
+  <details class="code">
+    <summary>View Python code — full pick-and-place control (ROS 2 + Keras)</summary>
+    <pre><code>&#x27;&#x27;&#x27;
+Warehouse-style pick and place robot for Stranger Things demo.
+Navigates to two pickup locations, detects which character is present,
+then delivers them to their assigned dropoff location.
+Each pickup and dropoff is approached via a waypoint so the robot
+always travels straight then turns, giving a consistent final orientation.
+While the robot is idle (waiting for navigation goals to complete), it spins
+180 degrees, takes a picture to identify the character, and spins back.
+&#x27;&#x27;&#x27;
+
+# start with Create3 docked, with the BACK of dock 0.5 m from (0,0), it will turn around when it undocks
+# RUN THIS IN TERMINAL BEFORE BEGINNING: ros2 service call /reset_pose irobot_create_msgs/srv/ResetPose &quot;{}&quot;
+# if needed (calibrate?): drive him to position: ros2 run teleop_twist_keyboard teleop_twist_keyboard
+# if needed (calibrate?): get position: ros2 topic echo /odom --once
+
+import rclpy
+from rclpy.action import ActionClient
+from rclpy.node import Node
+from irobot_create_msgs.action import NavigateToPosition, Undock, Dock
+from irobot_create_msgs.action import RotateAngle
+from keras.models import load_model
+from picamera2 import Picamera2
+from libcamera import controls
+import cv2
+import numpy as np
+import RPi.GPIO as GPIO
+import time
+import math
+
+# Disable scientific notation for clarity
+np.set_printoptions(suppress=True)
+
+# ==============================================================
+# EDIT THESE ON DEMO DAY
+# x — how far forward/backward. More negative = further forward. Less negative = not as far.
+# y — how far left/right. More negative = further right. Less negative = not as far right.
+# Assign each character to their dropoff location.
+# Format: &#x27;character_name&#x27;: [(waypoint), (final position)]
+# Waypoint: go straight to this x first, y=0, facing forward
+# Final: then turn and go to the actual dropoff position
+# ==============================================================
+DROPOFF_LOCATIONS = {
+&#x27;Dustin&#x27;: [(-0.9, 0.0, 0.0, 1.0), (-0.9, 0.724, 0.707, 0.707)], # &lt;-- swap with Will if needed
+&#x27;Will&#x27;: [(-1.9, 0.0, 0.0, 1.0), (-1.9, 0.742, 0.707, 0.707)], # &lt;-- swap with Dustin if needed
+}
+
+# ==============================================================
+# Each entry is [(waypoint), (final pickup position)]
+# Waypoint: go straight to this x first, y=0, facing forward
+# Final: then turn and go to the actual pickup position
+# ==============================================================
+PICKUP_LOCATIONS = [
+[(-0.85, 0.0, 0.0, 1.0), (-0.85, -0.6, -1.0, 0.0), (-0.85, -0.8, -0.707, 0.707)],
+[(-1.85, 0.0, 0.0, 1.0), (-1.85, -0.6, -1.0, 0.0), (-1.85, -0.8, -0.707, 0.707)],
+]
+
+# ==============================================================
+# Stepper motor GPIO pin configuration (L298N motor driver)
+# ==============================================================
+OUT1 = 12
+OUT2 = 11
+OUT3 = 13
+OUT4 = 15
+
+# Number of steps for one full open/close motion
+GRIPPER_STEPS = 120
+
+# Delay between stepper steps (seconds)
+STEP_DELAY = 0.01
+
+def _setup_gpio():
+    &quot;&quot;&quot;Configure GPIO pins for the stepper motor driver.&quot;&quot;&quot;
+    GPIO.setmode(GPIO.BOARD)
+    GPIO.setup(OUT1, GPIO.OUT)
+    GPIO.setup(OUT2, GPIO.OUT)
+    GPIO.setup(OUT3, GPIO.OUT)
+    GPIO.setup(OUT4, GPIO.OUT)
+    GPIO.output(OUT1, GPIO.LOW)
+    GPIO.output(OUT2, GPIO.LOW)
+    GPIO.output(OUT3, GPIO.LOW)
+    GPIO.output(OUT4, GPIO.LOW)
+
+def _step(current_step):
+    &quot;&quot;&quot;Output the correct coil pattern for the given step index (0-3).&quot;&quot;&quot;
+    patterns = [
+    (GPIO.HIGH, GPIO.LOW, GPIO.HIGH, GPIO.LOW), # step 0
+    (GPIO.LOW, GPIO.HIGH, GPIO.HIGH, GPIO.LOW), # step 1
+    (GPIO.LOW, GPIO.HIGH, GPIO.LOW, GPIO.HIGH), # step 2
+    (GPIO.HIGH, GPIO.LOW, GPIO.LOW, GPIO.HIGH), # step 3
+    ]
+    p = patterns[current_step]
+    GPIO.output(OUT1, p[0])
+    GPIO.output(OUT2, p[1])
+    GPIO.output(OUT3, p[2])
+    GPIO.output(OUT4, p[3])
+
+def gripper_close():
+    &quot;&quot;&quot;
+    Close the gripper by running the stepper motor in reverse for GRIPPER_STEPS steps.
+    Mirrors gripper_close.py — starts at step 3 and counts down.
+    &quot;&quot;&quot;
+    _setup_gpio()
+    try:
+        current_step = 3 # Reverse direction by starting at step 3
+        for _ in range(GRIPPER_STEPS):
+            _step(current_step)
+            time.sleep(STEP_DELAY)
+            current_step = 3 if current_step == 0 else current_step - 1
+    finally:
+        GPIO.cleanup()
+
+def gripper_open():
+    &quot;&quot;&quot;
+    Open the gripper by running the stepper motor forward for GRIPPER_STEPS steps.
+    Mirrors gripper_open.py — starts at step 0 and counts up.
+    &quot;&quot;&quot;
+    _setup_gpio()
+    try:
+        current_step = 0
+        for _ in range(GRIPPER_STEPS):
+            _step(current_step)
+            time.sleep(STEP_DELAY)
+            current_step = 0 if current_step == 3 else current_step + 1
+    finally:
+        GPIO.cleanup()
+
+# Define the class StrangerThingsRobot as a subclass of Node
+class StrangerThingsRobot(Node):
+
+    # Define a method to initialize the node
+    def __init__(self):
+        # Make sure the robot will stop before scanning
+        self.at_scan_point = False
+
+        # Initialize a node named stranger_things_robot
+        super().__init__(&#x27;stranger_things_robot&#x27;)
+
+        # Create an action client for undocking
+        self._undock_client = ActionClient(self, Undock, &#x27;undock&#x27;)
+        # Create an action client for docking (used at the end)
+        self._dock_client = ActionClient(self, Dock, &#x27;dock&#x27;)
+        # Create an action client for navigation
+        self._action_client = ActionClient(self, NavigateToPosition, &#x27;navigate_to_position&#x27;)
+        # Create an action client for in-place rotation (used for idle scan)
+        self._rotate_client = ActionClient(self, RotateAngle, &#x27;rotate_angle&#x27;)
+
+        # Track which pickup we are currently on (0 or 1)
+        self.current_pickup_index = 0
+        # Track whether we are navigating to a pickup or a dropoff
+        self.going_to_pickup = True
+        # Track whether we are at the waypoint or the final position
+        self.at_waypoint = False
+        # Store the current dropoff coords so we can use them after the waypoint
+        self.current_dropoff_coords = None
+        # Track the last character detected by the idle scan so the main flow can use it
+        self.last_detected_character = None
+
+        # Load the Teachable Machine model and labels once at startup
+        self.model = load_model(&#x27;keras_model.h5&#x27;, compile=False)
+        self.class_names = open(&#x27;labels.txt&#x27;, &#x27;r&#x27;).readlines()
+        self.get_logger().info(&#x27;Model loaded successfully!&#x27;)
+
+        # Set up the picamera and leave it running for the whole session
+        self.picam2 = Picamera2()
+        self.picam2.set_controls({&#x27;AfMode&#x27;: controls.AfModeEnum.Continuous})
+        self.picam2.start()
+        time.sleep(1) # give the camera time to warm up
+        self.get_logger().info(&#x27;Camera ready!&#x27;)
+
+        self.get_logger().info(&#x27;Stranger Things Robot initialized. Undocking...&#x27;)
+        # Kick off the sequence by undocking first
+        self.undock()
+
+    # ------------------------------------------------------------------
+    # UNDOCK
+    # ------------------------------------------------------------------
+    def undock(self):
+        goal_msg = Undock.Goal()
+        self._undock_client.wait_for_server()
+        self._send_goal_future = self._undock_client.send_goal_async(
+            goal_msg, feedback_callback=self.undock_feedback_callback)
+        self._send_goal_future.add_done_callback(self.undock_goal_response_callback)
+
+    def undock_goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info(&#x27;Undock goal rejected :(&#x27;)
+            return
+        self.get_logger().info(&#x27;Undock goal accepted :)&#x27;)
+        self._get_result_future = goal_handle.get_result_async()
+        self._get_result_future.add_done_callback(self.undock_result_callback)
+
+    def undock_result_callback(self, future):
+        result = future.result().result
+        self.get_logger().info(f&#x27;Undock result: {result}&#x27;)
+        self.get_logger().info(&#x27;Undocking complete! Starting navigation sequence...&#x27;)
+        self.send_next_goal()
+
+    def undock_feedback_callback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        self.get_logger().info(f&#x27;Undock feedback: {feedback}&#x27;)
+
+    # ------------------------------------------------------------------
+    # IDLE SCAN — spin 180°, capture + classify, spin back 180°
+    # ------------------------------------------------------------------
+    def idle_scan(self, on_complete):
+        self._idle_scan_callback = on_complete
+        self.get_logger().info(&#x27;Idle scan: rotating -90° to face character...&#x27;)
+        self._send_rotate(-math.pi / 2, self._idle_scan_after_first_rotate)
+
+    def _idle_scan_after_first_rotate(self):
+        self.get_logger().info(&#x27;Idle scan: capturing image...&#x27;)
+        character = self.detect_character()
+        self.last_detected_character = character
+        self.get_logger().info(f&#x27;Idle scan: detected {character}. Rotating back...&#x27;)
+        self._send_rotate(math.pi / 2, self._idle_scan_after_second_rotate)
+
+    def _idle_scan_after_second_rotate(self):
+        &quot;&quot;&quot;Called after the return 180° rotation — resume normal operation.&quot;&quot;&quot;
+        self.get_logger().info(&#x27;Idle scan complete. Resuming...&#x27;)
+        self._idle_scan_callback()
+
+    def _send_rotate(self, angle_radians, on_complete):
+        &quot;&quot;&quot;Send a RotateAngle goal. Calls on_complete() when done.&quot;&quot;&quot;
+        self._rotate_on_complete = on_complete
+        goal_msg = RotateAngle.Goal()
+        goal_msg.angle = angle_radians
+        goal_msg.max_rotation_speed = 0.5 # rad/s — slow enough to be safe
+        self._rotate_client.wait_for_server()
+        future = self._rotate_client.send_goal_async(goal_msg)
+        future.add_done_callback(self._rotate_goal_response_callback)
+
+    def _rotate_goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info(&#x27;Rotate goal rejected!&#x27;)
+            return
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._rotate_result_callback)
+
+    def _rotate_result_callback(self, future):
+        self.get_logger().info(&#x27;Rotation complete.&#x27;)
+        self._rotate_on_complete()
+
+    # ------------------------------------------------------------------
+    # MAIN NAVIGATION SEQUENCE
+    # ------------------------------------------------------------------
+    def send_next_goal(self):
+        &quot;&quot;&quot;Decide where to go next and send the navigation goal.&quot;&quot;&quot;
+        # If we have visited all pickups, return to dock
+        if self.current_pickup_index &gt;= len(PICKUP_LOCATIONS):
+            self.celebrate()
+            return
+
+        if self.going_to_pickup:
+            waypoint, scan_point, final = PICKUP_LOCATIONS[self.current_pickup_index]
+            if not self.at_waypoint:
+                # Step 1: go straight to the approach waypoint
+                self.get_logger().info(
+                    f&#x27;Heading to pickup {self.current_pickup_index + 1} waypoint at ({waypoint[0]}, {waypoint[1]})&#x27;)
+                self.at_waypoint = True
+                self.send_goal(*waypoint)
+            elif not self.at_scan_point:
+                # Step 2: move to scan position
+                self.get_logger().info(
+                    f&#x27;At waypoint, moving to scan position at ({scan_point[0]}, {scan_point[1]})&#x27;)
+                self.at_scan_point = True
+                self.send_goal(*scan_point)
+            else:
+                # Step 4: after scan, go to final pickup position
+                self.get_logger().info(
+                    f&#x27;Scan done, moving to final pickup at ({final[0]}, {final[1]})&#x27;)
+                self.at_waypoint = False
+                self.at_scan_point = False
+                self.send_goal(*final)
+        else:
+            if not self.at_waypoint:
+                # Use the character already detected during the idle scan if available,
+                # otherwise run a fresh detection now.
+                if self.last_detected_character is not None:
+                    character = self.last_detected_character
+                    self.last_detected_character = None
+                    self.get_logger().info(f&#x27;Using idle-scan result: {character}&#x27;)
+                else:
+                    character = self.detect_character()
+                waypoint, final = DROPOFF_LOCATIONS[character]
+                self.current_dropoff_coords = final
+                self.get_logger().info(
+                    f&#x27;Character: {character}. Heading to dropoff waypoint at ({waypoint[0]}, {waypoint[1]})&#x27;)
+                self.at_waypoint = True
+                self.send_goal(*waypoint)
+            else:
+                # Step 2: go to the final dropoff position
+                final = self.current_dropoff_coords
+                self.get_logger().info(
+                    f&#x27;Arrived at waypoint, turning to final dropoff at ({final[0]}, {final[1]})&#x27;)
+                self.at_waypoint = False
+                self.send_goal(*final)
+
+    def send_goal(self, x, y, oz, ow):
+        &quot;&quot;&quot;Send a NavigateToPosition goal.&quot;&quot;&quot;
+        goal_msg = NavigateToPosition.Goal()
+        goal_msg.goal_pose.header.frame_id = &#x27;odom&#x27;
+        goal_msg.goal_pose.pose.position.x = x
+        goal_msg.goal_pose.pose.position.y = y
+        goal_msg.goal_pose.pose.position.z = 0.0
+        goal_msg.goal_pose.pose.orientation.x = 0.0
+        goal_msg.goal_pose.pose.orientation.y = 0.0
+        goal_msg.goal_pose.pose.orientation.z = oz
+        goal_msg.goal_pose.pose.orientation.w = ow
+        goal_msg.achieve_goal_heading = True
+
+        self._action_client.wait_for_server()
+        self._send_goal_future = self._action_client.send_goal_async(
+            goal_msg, feedback_callback=self.feedback_callback)
+        self._send_goal_future.add_done_callback(self.goal_response_callback)
+
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info(&#x27;Goal rejected :(&#x27;)
+            return
+        self.get_logger().info(&#x27;Goal accepted :)&#x27;)
+        self._get_result_future = goal_handle.get_result_async()
+        self._get_result_future.add_done_callback(self.get_result_callback)
+
+    def get_result_callback(self, future):
+        result = future.result().result
+        self.get_logger().info(f&#x27;Navigation result: {result}&#x27;)
+
+        if self.going_to_pickup and not self.at_waypoint:
+            # Just arrived at the final pickup position — grab the character.
+            self.pick_up()
+            self.going_to_pickup = False
+            self.send_next_goal()
+        elif not self.going_to_pickup and not self.at_waypoint:
+            self.put_down()
+            self.get_logger().info(
+                f&#x27;Dropoff complete for pickup {self.current_pickup_index + 1}!&#x27;)
+            self.current_pickup_index += 1
+            self.going_to_pickup = True
+            self.at_waypoint = False # already False here, but explicit is safer
+            self.at_scan_point = False # &lt;-- add this line
+            self.send_next_goal()
+        else:
+            # Just arrived at a waypoint or scan point.
+            if self.going_to_pickup and self.at_scan_point:
+                # At the scan position — scan before final approach
+                self.get_logger().info(&#x27;At scan point — scanning before final approach...&#x27;)
+                self.idle_scan(self._after_idle_scan_at_pickup)
+            else:
+                self.send_next_goal()
+
+    def _after_idle_scan_at_pickup(self):
+        &quot;&quot;&quot;Scan complete — proceed to final pickup position.&quot;&quot;&quot;
+        self.send_next_goal()
+
+    def feedback_callback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        self.get_logger().info(f&#x27;Remaining distance: {feedback.remaining_travel_distance}&#x27;)
+
+    # ------------------------------------------------------------------
+    # CHARACTER DETECTION
+    # ------------------------------------------------------------------
+    def detect_character(self):
+        &quot;&quot;&quot;
+        Take 10 frames with the picamera, run the Teachable Machine model on
+        each, average the confidence scores, and return the top character name.
+        &quot;&quot;&quot;
+        self.get_logger().info(&#x27;Detecting character...&#x27;)
+
+        scores = {name.strip()[2:]: 0.0 for name in self.class_names}
+        num_frames = 10
+
+        for _ in range(num_frames):
+            frame = self.picam2.capture_array()
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
+            frame = cv2.resize(frame, (224, 224), interpolation=cv2.INTER_AREA)
+            image = np.asarray(frame, dtype=np.float32).reshape(1, 224, 224, 3)
+            image = (image / 127.5) - 1
+            prediction = self.model.predict(image, verbose=0)
+            for j, name in enumerate(self.class_names):
+                scores[name.strip()[2:]] += prediction[0][j]
+
+        character = max(scores, key=scores.get)
+        confidence = scores[character] / num_frames * 100
+        self.get_logger().info(f&#x27;Detected: {character} ({confidence:.1f}% confidence)&#x27;)
+        return character
+
+    # ------------------------------------------------------------------
+    # GRIPPER CONTROL (real stepper motor)
+    # ------------------------------------------------------------------
+    def pick_up(self):
+        &quot;&quot;&quot;Close the gripper to grab the character.&quot;&quot;&quot;
+        self.get_logger().info(&#x27;Picking up character — closing gripper...&#x27;)
+        gripper_close()
+        self.get_logger().info(&#x27;Gripper closed.&#x27;)
+
+    def put_down(self):
+        &quot;&quot;&quot;Open the gripper to release the character.&quot;&quot;&quot;
+        self.get_logger().info(&#x27;Putting down character — opening gripper...&#x27;)
+        gripper_open()
+        self.get_logger().info(&#x27;Gripper opened.&#x27;)
+
+    # ------------------------------------------------------------------
+    # CELEBRATE + DOCK
+    # ------------------------------------------------------------------
+    # def celebrate(self):
+    #     &quot;&quot;&quot;All characters delivered — return to dock.&quot;&quot;&quot;
+    #     self.get_logger().info(&#x27;All characters delivered! Returning to dock...&#x27;)
+    #     self._dock_client.wait_for_server()
+    #     goal_msg = Dock.Goal()
+    #     future = self._dock_client.send_goal_async(goal_msg)
+    #     future.add_done_callback(self._dock_goal_response_callback)
+
+    # def _dock_goal_response_callback(self, future):
+    #     goal_handle = future.result()
+    #     if not goal_handle.accepted:
+    #         self.get_logger().info(&#x27;Dock goal rejected!&#x27;)
+    #         rclpy.shutdown()
+    #         return
+    #     self.get_logger().info(&#x27;Docking...&#x27;)
+    #     result_future = goal_handle.get_result_async()
+    #     result_future.add_done_callback(self._dock_result_callback)
+
+    # def _dock_result_callback(self, future):
+    #     self.get_logger().info(&#x27;Docked successfully! Task complete.&#x27;)
+    #     rclpy.shutdown()
+
+def main(args=None):
+    # Initialize the rclpy library
+    rclpy.init(args=args)
+    # Create an instance of the StrangerThingsRobot class
+    robot = StrangerThingsRobot()
+    # Spin the node to activate callbacks
+    rclpy.spin(robot)
+
+if __name__ == &#x27;__main__&#x27;:
+    main()</code></pre>
+  </details>
+
+  <h2>Reflection</h2>
+  <p>Overall, this was a fairly successful project and allowed us to gain practical experience integrating multiple robotics technologies into a single system. Throughout the process we learned how to use ROS 2 for robot navigation, how to control hardware components such as motors through GPIO, and how computer vision and machine learning can be applied to real robotic tasks. In particular, the project introduced us to training and deploying a simple machine learning model for object recognition, which was a new concept for our team. If we had more time and the knowledge we gained after completing the project, we would approach some aspects differently. For example, we trained the character recognition model in a different room from where the final demo took place, which caused some recognition inconsistencies due to differences in lighting and environment; retraining the model directly in the demonstration space would likely improve accuracy. The navigation system itself worked quite precisely, but the small gripper limited the reliability of the pickup process, preventing a perfect success rate. Designing a larger gripper with wider claws would likely improve grasp stability and make the robot more consistent when picking up the characters.</p>
+
+
+  <h2>Gallery</h2>
+  <div class="gallery">
+    <img src="../images/create3obj-02.jpg" alt="Create 3 object recognition robot — 2" loading="lazy">
+    <img src="../images/create3obj-03.jpg" alt="Create 3 object recognition robot — 3" loading="lazy">
+    <img src="../images/create3obj-04.jpg" alt="Create 3 object recognition robot — 4" loading="lazy">
+    <img src="../images/create3obj-05.jpg" alt="Create 3 object recognition robot — 5" loading="lazy">
+    <img src="../images/create3obj-06.jpg" alt="Create 3 object recognition robot — 6" loading="lazy">
+  </div>
+
+  <a class="back-link" href="../projects.html">← Back to Projects</a>
+</main>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-links">
+      <a href="https://www.linkedin.com/in/davide-mirza-abb95b329" target="_blank" rel="noopener">LinkedIn</a>
+      <a href="../resume.html">Resume</a>
+    </div>
+    <p class="footer-copy">© 2026 Davide Mirza</p>
+  </div>
+</footer>
+
+</body>
+</html>

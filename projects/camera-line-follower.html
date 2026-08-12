@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Camera Line Follower | Davide Mirza</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="nav-logo" href="../index.html">Davide Mirza</a>
+    <ul class="nav-links">
+      <li><a href="../index.html#about">About</a></li>
+      <li><a href="../index.html#experience">Experience</a></li>
+      <li><a href="../projects.html">Projects</a></li>
+      <li><a href="../resume.html">Resume</a></li>
+      <li><a class="nav-cta" href="https://www.linkedin.com/in/davide-mirza-abb95b329" target="_blank" rel="noopener">LinkedIn</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="page-hero">
+  <div class="container">
+    <p class="section-label">Project · Computer Vision</p>
+    <h1>Camera Line Follower</h1>
+    <p>A robot that follows a line using a Raspberry Pi Camera and computer vision instead of IR sensors — on a fully custom-designed chassis.</p>
+    <div class="chips">
+      <span class="chip">OpenCV</span>
+      <span class="chip">picamera2</span>
+      <span class="chip">Onshape</span>
+      <span class="chip">Laser cutting</span>
+    </div>
+  </div>
+</header>
+
+<main class="article">
+  <img src="../images/cameralf-01.jpg" alt="Camera line follower">
+
+
+  <h2>Project analysis</h2>
+  <p>This project involves designing and building a robot that follows a predefined path using a Raspberry Pi Camera as the primary sensing system. The robot must detect and track the line using computer vision rather than IR sensors, and the chassis must be designed and fabricated from scratch without tape or hot glue. While additional sensors may supplement performance, the camera is required for line detection. The system processes live camera frames to identify the line position relative to the robot and adjusts motor speeds accordingly to remain centered on the path.</p>
+
+  <h2>Follower in use</h2>
+  <p>This robot uses a Raspberry Pi Camera to follow a yellow line on the ground. The camera continuously takes pictures and looks only at the lower part of the image where the line should appear. The program filters the image to detect the yellow color and finds the center of the line. It then compares the line's position to the center of the camera view. If the line is centered, the robot drives straight. If the line shifts left or right, the robot adjusts by slowing one motor and keeping the other faster, causing it to turn back toward the line. If the line is very close to the edge of the frame, the robot makes a stronger correction to avoid losing it. If it cannot find the line for a longer period, it enters a search routine: it moves forward, turns right, turns left, and reverses in a timed pattern to try to relocate the line. If it still cannot find it after two full search cycles, it drives forward for five seconds and then stops.</p>
+  <figure class="video-embed">
+    <iframe src="https://drive.google.com/file/d/1njfgEzYctT73xEi0WnUr3ioRy3sU-ucB/preview" title="The follower tracking the line" allow="autoplay; fullscreen" allowfullscreen loading="lazy"></iframe>
+    <figcaption>The follower tracking the line</figcaption>
+  </figure>
+  <h2>How it was built</h2>
+  <p>The robot is built on a fully custom chassis fabricated from laser-cut structural panels and mechanical fasteners to ensure rigidity and alignment. All mounting holes were designed in Onshape or measured and drilled precisely to secure the motors, Raspberry Pi, battery pack, and motor driver. A custom 3D-printed camera mount was designed to hold the Pi Camera at a fixed forward-facing angle optimized for line visibility and field of view. The mechanical layout was designed to maintain a low center of gravity and proper wheel alignment to reduce wobble. Wiring was routed cleanly and mechanically secured without adhesive materials, maintaining compliance with the project constraints.</p>
+
+  <details class="code">
+    <summary>View Python code — OpenCV vision &amp; drive control</summary>
+    <pre><code>import numpy as np
+import cv2
+from picamera2 import Picamera2
+from libcamera import controls
+import RPi.GPIO as GPIO
+import time
+
+# -----------------------------
+# Camera setup
+# -----------------------------
+picam2 = Picamera2()
+picam2.set_controls({&quot;AfMode&quot;: controls.AfModeEnum.Continuous})
+picam2.start()
+time.sleep(1)
+
+# -----------------------------
+# Yellow HSV range (calibrated)
+# -----------------------------
+lower_color = np.array([72, 160, 120])
+upper_color = np.array([102, 240, 150])
+
+# -----------------------------
+# Motor pins (BOARD numbering)
+# -----------------------------
+GPIO.setmode(GPIO.BOARD)
+GPIO.setwarnings(False)
+
+ENA, IN1, IN2 = 37, 36, 38 # Left motor
+ENB, IN3, IN4 = 23, 19, 21 # Right motor
+
+for p in [ENA, IN1, IN2, ENB, IN3, IN4]:
+    GPIO.setup(p, GPIO.OUT)
+    GPIO.output(p, GPIO.LOW)
+
+def stop_motors():
+    GPIO.output(ENA, GPIO.LOW)
+    GPIO.output(ENB, GPIO.LOW)
+
+def left_forward(on: bool):
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(ENA, GPIO.HIGH if on else GPIO.LOW)
+
+def left_backward(on: bool):
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)
+    GPIO.output(ENA, GPIO.HIGH if on else GPIO.LOW)
+
+def right_forward(on: bool):
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)
+    GPIO.output(ENB, GPIO.HIGH if on else GPIO.LOW)
+
+def right_backward(on: bool):
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)
+    GPIO.output(ENB, GPIO.HIGH if on else GPIO.LOW)
+
+def clamp01(x: float) -&gt; float:
+    return 0.0 if x &lt; 0.0 else 1.0 if x &gt; 1.0 else x
+
+def pulse_drive_dir(left_on: float, right_on: float, period: float, left_dir: str, right_dir: str):
+    &quot;&quot;&quot;
+    left_dir/right_dir: &#x27;fwd&#x27; or &#x27;rev&#x27;
+    left_on/right_on: seconds ON within this period (0..period)
+    &quot;&quot;&quot;
+    if left_dir == &quot;rev&quot;:
+        left_backward(left_on &gt; 0)
+    else:
+        left_forward(left_on &gt; 0)
+
+    if right_dir == &quot;rev&quot;:
+        right_backward(right_on &gt; 0)
+    else:
+        right_forward(right_on &gt; 0)
+
+    t0 = time.time()
+    while True:
+        dt = time.time() - t0
+        if dt &gt;= period:
+            break
+        if dt &gt;= left_on:
+            GPIO.output(ENA, GPIO.LOW)
+        if dt &gt;= right_on:
+            GPIO.output(ENB, GPIO.LOW)
+    stop_motors()
+
+# -----------------------------
+# Vision / filtering knobs
+# -----------------------------
+kernel = np.ones((5, 5), np.uint8)
+MIN_AREA = 250
+CENTER_TOL = 5
+
+PULSE_PERIOD = 0.08
+BASE_DUTY = 0.30
+STEER_GAIN = 1.7
+MIN_INNER_SCALE = 0.10
+EDGE_THRESH = 0.75
+PANIC_INNER_SCALE = 0.08
+PANIC_OUTER_BOOST = 1.4
+
+# -----------------------------
+# Lost-line behavior (SEARCH)
+# After HOLD_TIME w/o line:
+# forward 1s -&gt; right 3s -&gt; left 3s -&gt; backward 1s -&gt; repeat
+# If 2 full cycles without finding line: forward 5s then stop.
+# -----------------------------
+HOLD_TIME = 0.4
+
+SEARCH_PATTERN = [
+(&quot;forward&quot;, 1.0),
+(&quot;right&quot;, 3.0), # rotate right: left fwd + right rev
+(&quot;left&quot;, 3.0), # rotate left: left rev + right fwd
+(&quot;backward&quot;, 1.0),
+]
+
+MAX_SEARCH_CYCLES = 2
+FINAL_FORWARD_TIME = 5.0
+
+lost_mode = False
+phase_idx = 0
+phase_start_time = None
+lost_cycles = 0
+
+last_seen_time = time.time()
+last_seen_error = 0
+
+try:
+    while True:
+        image = picam2.capture_array(&quot;main&quot;)
+        h, w, _ = image.shape
+
+        crop_w, crop_h = 600, 450
+        start_x = max(0, min(w // 2 - crop_w // 2, w - crop_w))
+        start_y = max(0, min(int(h * 0.65), h - crop_h))
+        roi = image[start_y:start_y + crop_h, start_x:start_x + crop_w]
+
+        blur = cv2.GaussianBlur(roi, (5, 5), 0)
+        hsv = cv2.cvtColor(blur, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, lower_color, upper_color)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+        contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+        found = False
+        error = 0
+
+        if contours:
+            c = max(contours, key=cv2.contourArea)
+            if cv2.contourArea(c) &gt;= MIN_AREA:
+                M = cv2.moments(c)
+                if int(M[&quot;m00&quot;]) != 0:
+                    cx = int(M[&quot;m10&quot;] / M[&quot;m00&quot;])
+                    center_x_px = crop_w // 2
+                    error = cx - center_x_px
+                    found = True
+                    last_seen_time = time.time()
+                    last_seen_error = error
+                    # reset search state
+                    lost_mode = False
+                    phase_idx = 0
+                    phase_start_time = None
+                    lost_cycles = 0
+
+        if not found:
+            now = time.time()
+            # Flicker hold: keep using last steering
+            if now - last_seen_time &lt;= HOLD_TIME:
+                print(&quot;Line Flicker -&gt; Hold&quot;)
+                error = last_seen_error
+                found = True # treat as found for steering below
+            else:
+                # Enter / continue search mode
+                if not lost_mode:
+                    lost_mode = True
+                    phase_idx = 0
+                    phase_start_time = now
+                    lost_cycles = 0
+
+                # If 2 full cycles done -&gt; forward 5s then stop
+                if lost_cycles &gt;= MAX_SEARCH_CYCLES:
+                    print(&quot;Search failed (2 cycles) -&gt; Forward 5s then stop&quot;)
+                    t_end = time.time() + FINAL_FORWARD_TIME
+                    while time.time() &lt; t_end:
+                        base_on = PULSE_PERIOD * BASE_DUTY
+                        base_on = max(PULSE_PERIOD * 0.20, base_on)
+                        pulse_drive_dir(base_on, base_on, PULSE_PERIOD, &quot;fwd&quot;, &quot;fwd&quot;)
+                        cv2.imshow(&quot;mask&quot;, mask)
+                        cv2.imshow(&quot;frame&quot;, roi)
+                        key = cv2.waitKey(1) &amp; 0xFF
+                        if key == ord(&#x27;q&#x27;) or key == 27:
+                            raise KeyboardInterrupt
+                    stop_motors()
+                    break
+
+                phase, dur = SEARCH_PATTERN[phase_idx]
+
+                if (now - phase_start_time) &gt;= dur:
+                    phase_idx += 1
+                    if phase_idx &gt;= len(SEARCH_PATTERN):
+                        phase_idx = 0
+                        lost_cycles += 1
+                    phase_start_time = now
+                    phase, dur = SEARCH_PATTERN[phase_idx]
+
+                base_on = PULSE_PERIOD * BASE_DUTY
+                base_on = max(PULSE_PERIOD * 0.20, base_on)
+
+                if phase == &quot;forward&quot;:
+                    print(&quot;Line Lost -&gt; Search: Forward&quot;)
+                    pulse_drive_dir(base_on, base_on, PULSE_PERIOD, &quot;fwd&quot;, &quot;fwd&quot;)
+                elif phase == &quot;right&quot;:
+                    print(&quot;Line Lost -&gt; Search: Right (left fwd, right rev)&quot;)
+                    pulse_drive_dir(base_on, base_on, PULSE_PERIOD, &quot;fwd&quot;, &quot;rev&quot;)
+                elif phase == &quot;left&quot;:
+                    print(&quot;Line Lost -&gt; Search: Left (left rev, right fwd)&quot;)
+                    pulse_drive_dir(base_on, base_on, PULSE_PERIOD, &quot;rev&quot;, &quot;fwd&quot;)
+                else: # backward
+                    print(&quot;Line Lost -&gt; Search: Backward&quot;)
+                    pulse_drive_dir(base_on, base_on, PULSE_PERIOD, &quot;rev&quot;, &quot;rev&quot;)
+
+                cv2.imshow(&quot;mask&quot;, mask)
+                cv2.imshow(&quot;frame&quot;, roi)
+                key = cv2.waitKey(1) &amp; 0xFF
+                if key == ord(&#x27;q&#x27;) or key == 27:
+                    break
+                continue
+
+        # -----------------------------
+        # NORMAL line following
+        # -----------------------------
+        center_x = crop_w / 2.0
+        e_norm = (error / center_x)
+        e_mag = clamp01(abs(e_norm))
+
+        base_on = PULSE_PERIOD * (BASE_DUTY * (1.0 - 0.20 * e_mag))
+        base_on = max(PULSE_PERIOD * 0.20, base_on)
+
+        if abs(error) &lt;= CENTER_TOL:
+            print(&quot;On Track&quot;)
+            left_on = base_on
+            right_on = base_on
+        else:
+            inner_scale = 1.0 - (STEER_GAIN * (e_mag ** 1.3))
+            inner_scale = max(MIN_INNER_SCALE, inner_scale)
+            if error &lt; 0:
+                print(&quot;Turn Right&quot;)
+                left_on = base_on
+                right_on = base_on * inner_scale
+            else:
+                print(&quot;Turn Left&quot;)
+                left_on = base_on * inner_scale
+                right_on = base_on
+
+            if e_mag &gt; EDGE_THRESH:
+                if error &lt; 0:
+                    right_on = base_on * PANIC_INNER_SCALE
+                    left_on = min(PULSE_PERIOD, base_on * PANIC_OUTER_BOOST)
+                else:
+                    left_on = base_on * PANIC_INNER_SCALE
+                    right_on = min(PULSE_PERIOD, base_on * PANIC_OUTER_BOOST)
+
+        pulse_drive_dir(left_on, right_on, PULSE_PERIOD, &quot;fwd&quot;, &quot;fwd&quot;)
+
+        cv2.imshow(&quot;mask&quot;, mask)
+        cv2.imshow(&quot;frame&quot;, roi)
+        key = cv2.waitKey(1) &amp; 0xFF
+        if key == ord(&#x27;q&#x27;) or key == 27:
+            break
+
+except KeyboardInterrupt:
+    pass
+
+finally:
+    stop_motors()
+    GPIO.cleanup()
+    cv2.destroyAllWindows()
+    try:
+        picam2.stop()
+    except Exception:
+        pass</code></pre>
+  </details>
+
+  <h2>Reflection</h2>
+  <p>This project was successful in demonstrating a working camera-based line-following robot, but the most valuable part of the experience was troubleshooting the electrical system. We encountered significant issues with the H-bridge and DC motors, including inconsistent motor behavior and moments where the motors would not respond at all. Instead of immediately replacing components, we systematically debugged the system ourselves. Using a multimeter, we checked voltage levels, continuity, GPIO outputs, and motor driver connections to isolate the problem. This process helped us identify wiring mistakes and understand how the H-bridge controls motor direction and power delivery.</p>
+
+
+  <h2>Gallery</h2>
+  <div class="gallery">
+    <img src="../images/cameralf-02.jpg" alt="Camera line follower — 2" loading="lazy">
+    <img src="../images/cameralf-03.jpg" alt="Camera line follower — 3" loading="lazy">
+    <img src="../images/cameralf-04.jpg" alt="Camera line follower — 4" loading="lazy">
+    <img src="../images/cameralf-05.jpg" alt="Camera line follower — 5" loading="lazy">
+    <img src="../images/cameralf-06.jpg" alt="Camera line follower — 6" loading="lazy">
+  </div>
+
+  <a class="back-link" href="../projects.html">← Back to Projects</a>
+</main>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-links">
+      <a href="https://www.linkedin.com/in/davide-mirza-abb95b329" target="_blank" rel="noopener">LinkedIn</a>
+      <a href="../resume.html">Resume</a>
+    </div>
+    <p class="footer-copy">© 2026 Davide Mirza</p>
+  </div>
+</footer>
+
+</body>
+</html>
